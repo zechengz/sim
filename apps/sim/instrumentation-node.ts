@@ -16,7 +16,7 @@ const DEFAULT_TELEMETRY_CONFIG = {
   endpoint: env.TELEMETRY_ENDPOINT || 'https://telemetry.simstudio.ai/v1/traces',
   serviceName: 'sim-studio',
   serviceVersion: '0.1.0',
-  serverSide: { enabled: true },
+  serverSide: { enabled: false },
   batchSettings: {
     maxQueueSize: 100,
     maxExportBatchSize: 10,

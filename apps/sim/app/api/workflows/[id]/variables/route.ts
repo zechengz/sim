@@ -7,7 +7,9 @@ import { getUserEntityPermissions } from '@/lib/permissions/utils'
 import { db } from '@/db'
 import { workflow } from '@/db/schema'
 import type { Variable } from '@/stores/panel/variables/types'
+import * as traceroot from 'traceroot-sdk-ts'
 
+const traceroot_logger = traceroot.get_logger('WorkflowVariablesAPI')
 const logger = createLogger('WorkflowVariablesAPI')
 
 const VariablesSchema = z.object({
@@ -114,69 +116,80 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const requestId = crypto.randomUUID().slice(0, 8)
   const workflowId = (await params).id
+  console.log(`[${requestId}] GET workflowId: ${workflowId}`)
 
-  try {
-    // Get the session directly in the API route
-    const session = await getSession()
-    if (!session?.user?.id) {
-      logger.warn(`[${requestId}] Unauthorized workflow variables access attempt`)
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+  const getWorkflowVariables = traceroot.traceFunction(
+    async function getWorkflowVariables() {
+      console.log(`[${requestId}] getWorkflowVariables GET workflowId: ${workflowId}`)
+      traceroot_logger.info(`[${requestId}] getWorkflowVariables GET workflowId: ${workflowId}`)
 
-    // Get the workflow record
-    const workflowRecord = await db
-      .select()
-      .from(workflow)
-      .where(eq(workflow.id, workflowId))
-      .limit(1)
+      try {
+        // Get the session directly in the API route
+        const session = await getSession()
+        if (!session?.user?.id) {
+          logger.warn(`[${requestId}] Unauthorized workflow variables access attempt`)
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
 
-    if (!workflowRecord.length) {
-      logger.warn(`[${requestId}] Workflow not found: ${workflowId}`)
-      return NextResponse.json({ error: 'Workflow not found' }, { status: 404 })
-    }
+        // Get the workflow record
+        const workflowRecord = await db
+          .select()
+          .from(workflow)
+          .where(eq(workflow.id, workflowId))
+          .limit(1)
 
-    const workflowData = workflowRecord[0]
-    const workspaceId = workflowData.workspaceId
+        if (!workflowRecord.length) {
+          logger.warn(`[${requestId}] Workflow not found: ${workflowId}`)
+          return NextResponse.json({ error: 'Workflow not found' }, { status: 404 })
+        }
 
-    // Check authorization - either the user owns the workflow or has workspace permissions
-    let isAuthorized = workflowData.userId === session.user.id
+        const workflowData = workflowRecord[0]
+        const workspaceId = workflowData.workspaceId
 
-    // If not authorized by ownership and the workflow belongs to a workspace, check workspace permissions
-    if (!isAuthorized && workspaceId) {
-      const userPermission = await getUserEntityPermissions(
-        session.user.id,
-        'workspace',
-        workspaceId
-      )
-      isAuthorized = userPermission !== null
-    }
+        // Check authorization - either the user owns the workflow or has workspace permissions
+        let isAuthorized = workflowData.userId === session.user.id
 
-    if (!isAuthorized) {
-      logger.warn(
-        `[${requestId}] User ${session.user.id} attempted to access variables for workflow ${workflowId} without permission`
-      )
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+        // If not authorized by ownership and the workflow belongs to a workspace, check workspace permissions
+        if (!isAuthorized && workspaceId) {
+          const userPermission = await getUserEntityPermissions(
+            session.user.id,
+            'workspace',
+            workspaceId
+          )
+          isAuthorized = userPermission !== null
+        }
 
-    // Return variables if they exist
-    const variables = (workflowData.variables as Record<string, Variable>) || {}
+        if (!isAuthorized) {
+          logger.warn(
+            `[${requestId}] User ${session.user.id} attempted to access variables for workflow ${workflowId} without permission`
+          )
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
 
-    // Add cache headers to prevent frequent reloading
-    const variableHash = JSON.stringify(variables).length
-    const headers = new Headers({
-      'Cache-Control': 'max-age=30, stale-while-revalidate=300', // Cache for 30 seconds, stale for 5 min
-      ETag: `"variables-${workflowId}-${variableHash}"`,
-    })
+        // Return variables if they exist
+        const variables = (workflowData.variables as Record<string, Variable>) || {}
 
-    return NextResponse.json(
-      { data: variables },
-      {
-        status: 200,
-        headers,
+        // Add cache headers to prevent frequent reloading
+        const variableHash = JSON.stringify(variables).length
+        const headers = new Headers({
+          'Cache-Control': 'max-age=30, stale-while-revalidate=300', // Cache for 30 seconds, stale for 5 min
+          ETag: `"variables-${workflowId}-${variableHash}"`,
+        })
+
+        return NextResponse.json(
+          { data: variables },
+          {
+            status: 200,
+            headers,
+          }
+        )
+      } catch (error: any) {
+        logger.error(`[${requestId}] Workflow variables fetch error`, error)
+        return NextResponse.json({ error: error.message }, { status: 500 })
       }
-    )
-  } catch (error: any) {
-    logger.error(`[${requestId}] Workflow variables fetch error`, error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
+    },
+    { spanName: 'getWorkflowVariables', traceParams: true }
+  )
+
+  return await getWorkflowVariables()
 }

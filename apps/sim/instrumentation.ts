@@ -6,6 +6,10 @@ export async function register() {
 
   // Load Node.js-specific instrumentation
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    if (process.env.TRACEROT_ENABLED === "1") {
+      console.log("TRACEROT_ENABLED is true, importing traceroot-sdk-ts");
+      await import("traceroot-sdk-ts");
+    }
     console.log('[Main Instrumentation] Loading Node.js instrumentation...')
     const nodeInstrumentation = await import('./instrumentation-node')
     if (nodeInstrumentation.register) {
