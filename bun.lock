@@ -12,7 +12,7 @@
         "react-colorful": "5.6.1",
         "remark-gfm": "4.0.1",
         "socket.io-client": "4.8.1",
-        "traceroot-sdk-ts": "0.0.1-alpha.16",
+        "traceroot-sdk-ts": "0.0.1-alpha.18",
       },
       "devDependencies": {
         "@biomejs/biome": "2.0.0-beta.5",
@@ -3060,7 +3060,7 @@
 
     "tr46": ["tr46@5.1.1", "", { "dependencies": { "punycode": "^2.3.1" } }, "sha512-hdF5ZgjTqgAntKkklYw0R03MG2x/bSzTtkxmIRw/sTNV8YXsCJ1tfLAX23lhxhHJlEf3CRCOCGGWw3vI3GaSPw=="],
 
-    "traceroot-sdk-ts": ["traceroot-sdk-ts@0.0.1-alpha.16", "", { "dependencies": { "@aws-sdk/client-cloudwatch-logs": "^3.855.0", "@opentelemetry/api": "^1.9.0", "@opentelemetry/auto-instrumentations-node": "^0.53.0", "@opentelemetry/exporter-trace-otlp-http": "^0.53.0", "@opentelemetry/resources": "^1.28.0", "@opentelemetry/sdk-node": "^0.53.0", "@opentelemetry/sdk-trace-base": "^1.28.0", "@opentelemetry/sdk-trace-node": "^1.28.0", "@opentelemetry/semantic-conventions": "^1.36.0", "axios": "^1.6.0", "winston": "^3.11.0", "winston-cloudwatch": "^6.3.0", "yaml": "^2.3.4" } }, "sha512-yb/luzYuxIvQN694dI4LM9Jm3mwcGv4sn9wwSe5Mg4Rjm83bZkevfPUBQrHVHFPVZa3oVc3SQa7ciXVTrucCjw=="],
+    "traceroot-sdk-ts": ["traceroot-sdk-ts@0.0.1-alpha.18", "", { "dependencies": { "@aws-sdk/client-cloudwatch-logs": "^3.855.0", "@opentelemetry/api": "^1.9.0", "@opentelemetry/auto-instrumentations-node": "^0.53.0", "@opentelemetry/exporter-trace-otlp-http": "^0.53.0", "@opentelemetry/resources": "^1.28.0", "@opentelemetry/sdk-node": "^0.53.0", "@opentelemetry/sdk-trace-base": "^1.28.0", "@opentelemetry/sdk-trace-node": "^1.28.0", "@opentelemetry/semantic-conventions": "^1.36.0", "axios": "^1.6.0", "winston": "^3.11.0", "winston-cloudwatch": "^6.3.0", "yaml": "^2.3.4" } }, "sha512-GOczeB7oXkN64s6WjT3iyNJ1seri+JUOmiDuS3EtjmUccmNEFjGT7kaYhwpNA/Qgil7Tovi/fNkfPr3psLk4tQ=="],
 
     "tree-kill": ["tree-kill@1.2.2", "", { "bin": { "tree-kill": "cli.js" } }, "sha512-L0Orpi8qGpRG//Nd+H90vFB+3iHnue1zSSGmNOOCh1GLJ7rUKVwV2HvijphGQS2UmhUZewS9VgvxYIdgr+fG1A=="],
 

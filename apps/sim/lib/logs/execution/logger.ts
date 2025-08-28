@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from 'uuid'
 import { getCostMultiplier, isBillingEnabled } from '@/lib/environment'
 import { createLogger } from '@/lib/logs/console/logger'
 import { snapshotService } from '@/lib/logs/execution/snapshot/service'
+import { get_logger } from 'traceroot-sdk-ts'
+import * as traceroot from 'traceroot-sdk-ts'
 import type {
   BlockOutputData,
   ExecutionEnvironment,
@@ -28,6 +30,7 @@ export interface ToolCall {
 }
 
 const logger = createLogger('ExecutionLogger')
+const traceLogger = get_logger('ExecutionLogger')
 
 export class ExecutionLogger implements IExecutionLoggerService {
   async startWorkflowExecution(params: {
@@ -42,52 +45,61 @@ export class ExecutionLogger implements IExecutionLoggerService {
   }> {
     const { workflowId, executionId, trigger, environment, workflowState } = params
 
-    logger.debug(`Starting workflow execution ${executionId} for workflow ${workflowId}`)
+    const startWorkflowExecutionTrace = traceroot.traceFunction(
+      async function startWorkflowExecutionTrace() {
+        logger.debug(`Starting workflow execution ${executionId} for workflow ${workflowId}`)
+        traceLogger.debug({ workflowId, executionId }, `Starting workflow execution ${executionId} for workflow ${workflowId}`)
 
-    const snapshotResult = await snapshotService.createSnapshotWithDeduplication(
-      workflowId,
-      workflowState
+        const snapshotResult = await snapshotService.createSnapshotWithDeduplication(
+          workflowId,
+          workflowState
+        )
+
+        const startTime = new Date()
+
+        const [workflowLog] = await db
+          .insert(workflowExecutionLogs)
+          .values({
+            id: uuidv4(),
+            workflowId,
+            executionId,
+            stateSnapshotId: snapshotResult.snapshot.id,
+            level: 'info',
+            trigger: trigger.type,
+            startedAt: startTime,
+            endedAt: null,
+            totalDurationMs: null,
+            executionData: {
+              environment,
+              trigger,
+            },
+          })
+          .returning()
+
+        logger.debug(`Created workflow log ${workflowLog.id} for execution ${executionId}`)
+        traceLogger.debug({ workflowId, executionId }, `Created workflow log ${workflowLog.id} for execution ${executionId}`)
+
+        return {
+          workflowLog: {
+            id: workflowLog.id,
+            workflowId: workflowLog.workflowId,
+            executionId: workflowLog.executionId,
+            stateSnapshotId: workflowLog.stateSnapshotId,
+            level: workflowLog.level as 'info' | 'error',
+            trigger: workflowLog.trigger as ExecutionTrigger['type'],
+            startedAt: workflowLog.startedAt.toISOString(),
+            endedAt: workflowLog.endedAt?.toISOString() || workflowLog.startedAt.toISOString(),
+            totalDurationMs: workflowLog.totalDurationMs || 0,
+            executionData: workflowLog.executionData as WorkflowExecutionLog['executionData'],
+            createdAt: workflowLog.createdAt.toISOString(),
+          },
+          snapshot: snapshotResult.snapshot,
+        }
+      },
+      { spanName: 'startWorkflowExecution', traceParams: true }
     )
 
-    const startTime = new Date()
-
-    const [workflowLog] = await db
-      .insert(workflowExecutionLogs)
-      .values({
-        id: uuidv4(),
-        workflowId,
-        executionId,
-        stateSnapshotId: snapshotResult.snapshot.id,
-        level: 'info',
-        trigger: trigger.type,
-        startedAt: startTime,
-        endedAt: null,
-        totalDurationMs: null,
-        executionData: {
-          environment,
-          trigger,
-        },
-      })
-      .returning()
-
-    logger.debug(`Created workflow log ${workflowLog.id} for execution ${executionId}`)
-
-    return {
-      workflowLog: {
-        id: workflowLog.id,
-        workflowId: workflowLog.workflowId,
-        executionId: workflowLog.executionId,
-        stateSnapshotId: workflowLog.stateSnapshotId,
-        level: workflowLog.level as 'info' | 'error',
-        trigger: workflowLog.trigger as ExecutionTrigger['type'],
-        startedAt: workflowLog.startedAt.toISOString(),
-        endedAt: workflowLog.endedAt?.toISOString() || workflowLog.startedAt.toISOString(),
-        totalDurationMs: workflowLog.totalDurationMs || 0,
-        executionData: workflowLog.executionData as WorkflowExecutionLog['executionData'],
-        createdAt: workflowLog.createdAt.toISOString(),
-      },
-      snapshot: snapshotResult.snapshot,
-    }
+    return await startWorkflowExecutionTrace()
   }
 
   async completeWorkflowExecution(params: {
@@ -118,109 +130,126 @@ export class ExecutionLogger implements IExecutionLoggerService {
   }): Promise<WorkflowExecutionLog> {
     const { executionId, endedAt, totalDurationMs, costSummary, finalOutput, traceSpans } = params
 
-    logger.debug(`Completing workflow execution ${executionId}`)
+    const completeWorkflowExecutionTrace = traceroot.traceFunction(
+      async () => {
+        logger.debug(`Completing workflow execution ${executionId}`)
+        traceLogger.debug({ executionId }, `Completing workflow execution ${executionId}`)
 
-    // Determine if workflow failed by checking trace spans for errors
-    const hasErrors = traceSpans?.some((span: any) => {
-      const checkSpanForErrors = (s: any): boolean => {
-        if (s.status === 'error') return true
-        if (s.children && Array.isArray(s.children)) {
-          return s.children.some(checkSpanForErrors)
+        // Determine if workflow failed by checking trace spans for errors
+        const hasErrors = traceSpans?.some((span: any) => {
+          const checkSpanForErrors = (s: any): boolean => {
+            if (s.status === 'error') return true
+            if (s.children && Array.isArray(s.children)) {
+              return s.children.some(checkSpanForErrors)
+            }
+            return false
+          }
+          return checkSpanForErrors(span)
+        })
+
+        const level = hasErrors ? 'error' : 'info'
+
+        // Extract files from trace spans and final output
+        const executionFiles = this.extractFilesFromExecution(traceSpans, finalOutput)
+
+        const [updatedLog] = await db
+          .update(workflowExecutionLogs)
+          .set({
+            level,
+            endedAt: new Date(endedAt),
+            totalDurationMs,
+            files: executionFiles.length > 0 ? executionFiles : null,
+            executionData: {
+              traceSpans,
+              finalOutput,
+              tokenBreakdown: {
+                prompt: costSummary.totalPromptTokens,
+                completion: costSummary.totalCompletionTokens,
+                total: costSummary.totalTokens,
+              },
+              models: costSummary.models,
+            },
+            cost: {
+              total: costSummary.totalCost,
+              input: costSummary.totalInputCost,
+              output: costSummary.totalOutputCost,
+              tokens: {
+                prompt: costSummary.totalPromptTokens,
+                completion: costSummary.totalCompletionTokens,
+                total: costSummary.totalTokens,
+              },
+              models: costSummary.models,
+            },
+          })
+          .where(eq(workflowExecutionLogs.executionId, executionId))
+          .returning()
+
+        if (!updatedLog) {
+          throw new Error(`Workflow log not found for execution ${executionId}`)
         }
-        return false
-      }
-      return checkSpanForErrors(span)
-    })
 
-    const level = hasErrors ? 'error' : 'info'
+        // Update user stats with cost information (same logic as original execution logger)
+        await this.updateUserStats(
+          updatedLog.workflowId,
+          costSummary,
+          updatedLog.trigger as ExecutionTrigger['type']
+        )
 
-    // Extract files from trace spans and final output
-    const executionFiles = this.extractFilesFromExecution(traceSpans, finalOutput)
+        const workflowId = updatedLog.workflowId
+        logger.debug(`Completed workflow execution ${executionId}`)
+        traceLogger.debug({ workflowId, executionId }, `Completed workflow execution ${executionId}`)
 
-    const [updatedLog] = await db
-      .update(workflowExecutionLogs)
-      .set({
-        level,
-        endedAt: new Date(endedAt),
-        totalDurationMs,
-        files: executionFiles.length > 0 ? executionFiles : null,
-        executionData: {
-          traceSpans,
-          finalOutput,
-          tokenBreakdown: {
-            prompt: costSummary.totalPromptTokens,
-            completion: costSummary.totalCompletionTokens,
-            total: costSummary.totalTokens,
-          },
-          models: costSummary.models,
-        },
-        cost: {
-          total: costSummary.totalCost,
-          input: costSummary.totalInputCost,
-          output: costSummary.totalOutputCost,
-          tokens: {
-            prompt: costSummary.totalPromptTokens,
-            completion: costSummary.totalCompletionTokens,
-            total: costSummary.totalTokens,
-          },
-          models: costSummary.models,
-        },
-      })
-      .where(eq(workflowExecutionLogs.executionId, executionId))
-      .returning()
-
-    if (!updatedLog) {
-      throw new Error(`Workflow log not found for execution ${executionId}`)
-    }
-
-    // Update user stats with cost information (same logic as original execution logger)
-    await this.updateUserStats(
-      updatedLog.workflowId,
-      costSummary,
-      updatedLog.trigger as ExecutionTrigger['type']
+        return {
+          id: updatedLog.id,
+          workflowId: updatedLog.workflowId,
+          executionId: updatedLog.executionId,
+          stateSnapshotId: updatedLog.stateSnapshotId,
+          level: updatedLog.level as 'info' | 'error',
+          trigger: updatedLog.trigger as ExecutionTrigger['type'],
+          startedAt: updatedLog.startedAt.toISOString(),
+          endedAt: updatedLog.endedAt?.toISOString() || endedAt,
+          totalDurationMs: updatedLog.totalDurationMs || totalDurationMs,
+          executionData: updatedLog.executionData as WorkflowExecutionLog['executionData'],
+          cost: updatedLog.cost as any,
+          createdAt: updatedLog.createdAt.toISOString(),
+        }
+      },
+      { spanName: 'completeWorkflowExecution', traceParams: true }
     )
 
-    logger.debug(`Completed workflow execution ${executionId}`)
-
-    return {
-      id: updatedLog.id,
-      workflowId: updatedLog.workflowId,
-      executionId: updatedLog.executionId,
-      stateSnapshotId: updatedLog.stateSnapshotId,
-      level: updatedLog.level as 'info' | 'error',
-      trigger: updatedLog.trigger as ExecutionTrigger['type'],
-      startedAt: updatedLog.startedAt.toISOString(),
-      endedAt: updatedLog.endedAt?.toISOString() || endedAt,
-      totalDurationMs: updatedLog.totalDurationMs || totalDurationMs,
-      executionData: updatedLog.executionData as WorkflowExecutionLog['executionData'],
-      cost: updatedLog.cost as any,
-      createdAt: updatedLog.createdAt.toISOString(),
-    }
+    return await completeWorkflowExecutionTrace()
   }
 
   async getWorkflowExecution(executionId: string): Promise<WorkflowExecutionLog | null> {
-    const [workflowLog] = await db
-      .select()
-      .from(workflowExecutionLogs)
-      .where(eq(workflowExecutionLogs.executionId, executionId))
-      .limit(1)
+    const getWorkflowExecutionTrace = traceroot.traceFunction(
+      async function getWorkflowExecutionTrace() {
+        const [workflowLog] = await db
+          .select()
+          .from(workflowExecutionLogs)
+          .where(eq(workflowExecutionLogs.executionId, executionId))
+          .limit(1)
 
-    if (!workflowLog) return null
+        if (!workflowLog) return null
 
-    return {
-      id: workflowLog.id,
-      workflowId: workflowLog.workflowId,
-      executionId: workflowLog.executionId,
-      stateSnapshotId: workflowLog.stateSnapshotId,
-      level: workflowLog.level as 'info' | 'error',
-      trigger: workflowLog.trigger as ExecutionTrigger['type'],
-      startedAt: workflowLog.startedAt.toISOString(),
-      endedAt: workflowLog.endedAt?.toISOString() || workflowLog.startedAt.toISOString(),
-      totalDurationMs: workflowLog.totalDurationMs || 0,
-      executionData: workflowLog.executionData as WorkflowExecutionLog['executionData'],
-      cost: workflowLog.cost as any,
-      createdAt: workflowLog.createdAt.toISOString(),
-    }
+        return {
+          id: workflowLog.id,
+          workflowId: workflowLog.workflowId,
+          executionId: workflowLog.executionId,
+          stateSnapshotId: workflowLog.stateSnapshotId,
+          level: workflowLog.level as 'info' | 'error',
+          trigger: workflowLog.trigger as ExecutionTrigger['type'],
+          startedAt: workflowLog.startedAt.toISOString(),
+          endedAt: workflowLog.endedAt?.toISOString() || workflowLog.startedAt.toISOString(),
+          totalDurationMs: workflowLog.totalDurationMs || 0,
+          executionData: workflowLog.executionData as WorkflowExecutionLog['executionData'],
+          cost: workflowLog.cost as any,
+          createdAt: workflowLog.createdAt.toISOString(),
+        }
+      },
+      { spanName: 'getWorkflowExecution', traceParams: true }
+    )
+
+    return await getWorkflowExecutionTrace()
   }
 
   /**
@@ -243,11 +272,13 @@ export class ExecutionLogger implements IExecutionLoggerService {
   ): Promise<void> {
     if (!isBillingEnabled) {
       logger.debug('Billing is disabled, skipping user stats cost update')
+      traceLogger.debug({ workflowId }, 'Billing is disabled, skipping user stats cost update')
       return
     }
 
     if (costSummary.totalCost <= 0) {
       logger.debug('No cost to update in user stats')
+      traceLogger.debug({ workflowId }, 'No cost to update in user stats')
       return
     }
 
@@ -296,6 +327,12 @@ export class ExecutionLogger implements IExecutionLoggerService {
           totalCost: costToStore,
           totalTokens: costSummary.totalTokens,
         })
+        traceLogger.debug({ workflowId }, 'Created new user stats record with cost data', {
+          userId,
+          trigger,
+          totalCost: costToStore,
+          totalTokens: costSummary.totalTokens,
+        })
       } else {
         // Update existing user stats record with trigger-specific increments
         const updateFields: any = {
@@ -327,6 +364,12 @@ export class ExecutionLogger implements IExecutionLoggerService {
         await db.update(userStats).set(updateFields).where(eq(userStats.userId, userId))
 
         logger.debug('Updated existing user stats record with cost data', {
+          userId,
+          trigger,
+          addedCost: costToStore,
+          addedTokens: costSummary.totalTokens,
+        })
+        traceLogger.debug({ workflowId }, 'Updated existing user stats record with cost data', {
           userId,
           trigger,
           addedCost: costToStore,
